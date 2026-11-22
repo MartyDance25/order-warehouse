@@ -1,0 +1,19 @@
+[server]
+port = 8765
+address = "0.0.0.0"
+headless = true
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#0f5f5c"
+backgroundColor = "#f4f0e7"
+secondaryBackgroundColor = "#ebe4d6"
+textColor = "#1c2430"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
