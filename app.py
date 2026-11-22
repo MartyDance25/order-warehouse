@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -13,7 +12,15 @@ import streamlit as st
 from warehouse.catalog import TABLES
 from warehouse.checker import check_sql
 from warehouse.dashboard import read_daily, read_rank, read_user_daily
-from warehouse.db import drop_table, list_tables, open_database, reset_database, table_exists
+from warehouse.db import (
+    SandboxError,
+    drop_table,
+    enforce_session_quota,
+    list_tables,
+    open_database,
+    reset_database,
+    table_exists,
+)
 from warehouse.sqlutil import quote_ident
 from warehouse.exercises import EXERCISES, ORDER_GUIDE, exercises_by_layer, get_exercise, student_table_meta
 from warehouse.lineage import QUESTIONS, REFERENCE_STEPS, grade_lineage
@@ -59,28 +66,16 @@ def session_files() -> tuple[Path, Path]:
     return root / f"{safe}.duckdb", root / f"{safe}.progress.json"
 
 
-def cleanup_old_sessions(root: Path, keep: Path) -> None:
-    for path in root.glob("*.duckdb"):
-        if path == keep:
-            continue
-        try:
-            if path.stat().st_mtime and path.stat().st_size >= 0:
-                age_seconds = time.time() - path.stat().st_mtime
-                if age_seconds > 48 * 3600:
-                    path.unlink(missing_ok=True)
-                    path.with_suffix(".progress.json").unlink(missing_ok=True)
-        except OSError:
-            continue
-
-
 def get_connection():
     db_path, progress_path = session_files()
-    if not st.session_state.get("_cleaned"):
-        cleanup_old_sessions(db_path.parent, db_path)
-        st.session_state._cleaned = True
+    enforce_session_quota(db_path.parent, db_path)
     conn = st.session_state.get("con")
     if conn is None or st.session_state.get("db_path") != str(db_path):
-        conn = open_database(db_path)
+        try:
+            conn = open_database(db_path)
+        except SandboxError:
+            st.error("实训库没能在安全限制下打开，已停止执行。")
+            st.stop()
         st.session_state.con = conn
         st.session_state.db_path = str(db_path)
         st.session_state.progress_path = str(progress_path)

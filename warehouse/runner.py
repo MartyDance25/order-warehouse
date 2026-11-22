@@ -13,6 +13,19 @@ from warehouse.sqlutil import QUERY_HEADS, guard_sql, leading_keyword, quote_ide
 MAX_ROWS = 5000
 
 
+class RowLimitError(RuntimeError):
+    pass
+
+
+def _fetch_limited(con, sql: str, limit: int = MAX_ROWS) -> pd.DataFrame:
+    cursor = con.execute(sql)
+    columns = [item[0] for item in (cursor.description or [])]
+    rows = cursor.fetchmany(limit + 1)
+    if len(rows) > limit:
+        raise RowLimitError(f"结果超过 {limit} 行。请先聚合，或缩小到题目要求的粒度。")
+    return pd.DataFrame(rows, columns=columns)
+
+
 @dataclass
 class RunResult:
     ok: bool
@@ -47,7 +60,7 @@ def execute_student_sql(
                 break
             if head in QUERY_HEADS:
                 last_query = stmt
-                con.execute(stmt).fetchdf()
+                _fetch_limited(con, stmt)
             else:
                 con.execute(stmt)
 
@@ -62,22 +75,29 @@ def execute_student_sql(
                     "",
                     target_table,
                 )
-            frame = con.execute(f"SELECT * FROM {quote_ident(target_table)}").fetchdf()
+            quoted = quote_ident(target_table)
+            count = con.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 FROM {quoted} LIMIT {MAX_ROWS + 1})"
+            ).fetchone()[0]
+            if int(count) > MAX_ROWS:
+                con.execute(f"DROP TABLE IF EXISTS {quoted}")
+                return _fail(
+                    f"结果超过 {MAX_ROWS} 行。请先聚合，或缩小到题目要求的粒度。",
+                    "",
+                    target_table,
+                )
+            frame = _fetch_limited(con, f"SELECT * FROM {quoted} LIMIT {MAX_ROWS}")
             shown_table = target_table
         elif last_query:
-            frame = con.execute(last_query).fetchdf()
+            frame = _fetch_limited(con, last_query)
             shown_table = None
         else:
             frame = pd.DataFrame()
             shown_table = None
 
-        if len(frame) > MAX_ROWS:
-            return _fail(
-                f"结果有 {len(frame)} 行，超过 {MAX_ROWS} 行。请先聚合，或缩小到题目要求的粒度。",
-                "",
-                shown_table,
-            )
         return RunResult(True, "", "", frame, int(len(frame)), shown_table)
+    except RowLimitError as exc:
+        return _fail(str(exc), str(exc), target_table)
     except Exception as exc:  # DuckDB raises several error types
         raw = str(exc)
         return _fail(explain_error(raw), raw, target_table)

@@ -172,11 +172,17 @@ def guard_sql(sql: str) -> tuple[bool, str]:
         return False, "SQL 太长了。请控制在两万个字符以内。"
     if "；" in sql:
         return False, "你用了中文分号；。SQL 里请使用英文分号 ; 。"
+    if "$" in sql:
+        return False, "不能使用美元符号。美元引号会让语句检查失真，请改用普通单引号。"
     statements = [stmt for stmt in split_sql(sql) if remove_comments(stmt).strip()]
     if not statements:
         return False, "还没有可执行的 SQL。"
     for stmt in statements:
         code = remove_comments(stmt).strip()
+        # 先扫原文。单引号遮盖会把美元引号里的函数名一起抹掉，检查就失效了。
+        for pattern, message in _BANNED:
+            if pattern.search(stmt) or pattern.search(code):
+                return False, message
         masked = _mask_literals(code)
         for pattern, message in _BANNED:
             if pattern.search(masked):

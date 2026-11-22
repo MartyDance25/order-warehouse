@@ -132,6 +132,53 @@ def test_rank_order_is_required():
     con.close()
 
 
+def test_dollar_quote_cannot_hide_getenv():
+    payload = "SELECT $$'$$ AS marker UNION ALL SELECT getenv('PATH')"
+    allowed, message = guard_sql(payload)
+    assert not allowed
+    assert "美元" in message or "环境变量" in message
+    con = _new_db()
+    result = execute_student_sql(con, payload, None)
+    assert not result.ok
+    assert result.frame is None
+    locked = con.execute("SELECT current_setting('enable_external_access'), current_setting('lock_configuration')").fetchone()
+    assert str(locked[0]).lower() in {"false", "0"}
+    assert str(locked[1]).lower() in {"true", "1"}
+    con.close()
+
+
+def test_row_cap_does_not_materialize_all_rows():
+    con = _new_db()
+    result = execute_student_sql(con, "SELECT * FROM range(6000)", None)
+    assert not result.ok
+    assert result.frame is None
+    assert "5000" in result.chinese
+    created = execute_student_sql(con, "CREATE TABLE too_big AS SELECT * FROM range(6000)", "too_big")
+    assert not created.ok
+    assert created.frame is None
+    still_there = con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'too_big'"
+    ).fetchone()[0]
+    assert still_there == 0
+    con.close()
+
+
+def test_session_files_stay_within_quota(tmp_path):
+    from warehouse.db import MAX_SESSION_FILES, enforce_session_quota
+
+    keep = tmp_path / "keep.duckdb"
+    keep.write_bytes(b"k")
+    for index in range(MAX_SESSION_FILES + 8):
+        path = tmp_path / f"s{index}.duckdb"
+        path.write_bytes(b"x" * 32)
+        progress = path.with_suffix(".progress.json")
+        progress.write_text("{}", encoding="utf-8")
+    enforce_session_quota(tmp_path, keep)
+    left = list(tmp_path.glob("*.duckdb"))
+    assert keep in left or keep.resolve() in {item.resolve() for item in left}
+    assert len(left) <= MAX_SESSION_FILES
+
+
 def test_syntax_error_and_guard():
     con = _new_db()
     result = execute_student_sql(con, "SELEC 1", None)
